@@ -46,143 +46,112 @@ def titulo_subbloque(texto):
     print("-" * ANCHO)
 
 
+class ReservaPrueba:
+    """Mantiene la prueba reservada hasta su apertura única en evaluación."""
+
+    def __init__(self, datos, objetivo, ids_entrenamiento):
+        if not datos.index.equals(objetivo.index):
+            raise ValueError("Las filas y etiquetas de prueba están desalineadas.")
+        if not datos.index.is_unique or not objetivo.index.is_unique:
+            raise ValueError("Los identificadores de prueba deben ser únicos.")
+        if not set(datos.index).isdisjoint(ids_entrenamiento):
+            raise ValueError("Entrenamiento y prueba comparten identificadores de origen.")
+        self.n_registros = len(datos)
+        self.__datos = datos.copy(deep=True)
+        self.__objetivo = objetivo.copy(deep=True)
+        self.__abierta = False
+
+    def abrir(self):
+        if self.__abierta:
+            raise RuntimeError("La reserva de prueba ya se abrió para evaluación.")
+        datos, objetivo = self.__datos, self.__objetivo
+        self.__datos = self.__objetivo = None
+        self.__abierta = True
+        return datos, objetivo
+
+
 # Bloque 1: preprocesamiento de datos
 
-titulo_bloque("BLOQUE 1: PREPROCESAMIENTO DE DATOS")
 
-# 1.1. Ingesta
-# Obtiene Cleveland de UCI [1].
+def preparar_datos():
+    """Devuelve el entrenamiento y mantiene la prueba encapsulada."""
+    titulo_bloque("BLOQUE 1: PREPROCESAMIENTO DE DATOS")
+    # Ingesta y binarización según UCI [1].
+    dataset = fetch_ucirepo(id=45)
+    df = pd.concat([dataset.data.features, dataset.data.targets], axis=1)
+    predictoras = [c for c in df.columns if c != VARIABLE_ORIGINAL]
+    registros_ingesta = len(df)
+    df[VARIABLE_OBJETIVO] = (df[VARIABLE_ORIGINAL] > 0).astype(int)
 
-dataset = fetch_ucirepo(id=45)
-df = pd.concat([dataset.data.features, dataset.data.targets], axis=1)
+    # Exclusión de registros incompletos [15].
+    df = df.dropna()
+    registros_completos = len(df)
+    X, y = df[predictoras], df[VARIABLE_OBJETIVO]
+    # Partición estratificada antes del balanceo [7].
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=PROPORCION_PRUEBA, random_state=SEMILLA, stratify=y,
+    )
+    if not X_train.index.equals(y_train.index) or not X_train.index.is_unique:
+        raise ValueError("Las filas y etiquetas de entrenamiento están desalineadas.")
+    reserva = ReservaPrueba(X_test, y_test, X_train.index)
+    del X_test, y_test
+    X_real, y_real = X_train.copy(), y_train.copy()
 
-predictoras = [columna for columna in df.columns if columna != VARIABLE_ORIGINAL]
-registros_ingesta = len(df)
 
-titulo_subbloque("1.1. Ingesta")
-print(f"Registros obtenidos:   {registros_ingesta}")
-print(f"Variables predictoras: {len(predictoras)}")
-print(f"Variable objetivo:     {VARIABLE_ORIGINAL} "
-      f"(niveles {sorted(df[VARIABLE_ORIGINAL].unique().tolist())})")
+    niveles_entrenamiento = df.loc[X_real.index, VARIABLE_ORIGINAL].value_counts().sort_index()
+    clases_previas = y_real.value_counts().sort_index()
+    titulo_subbloque("1.1. Ingesta y delimitación de conjuntos")
+    print(f"Registros obtenidos: {registros_ingesta}; completos: {registros_completos}")
+    print(f"Predictoras: {len(predictoras)}; entrenamiento real: {len(X_real)}")
+    print(f"Reserva encapsulada: {reserva.n_registros} registros; se abre en evaluación")
 
-# 1.2. Binarización de la variable objetivo
-# Agrupa num > 0 como presencia de enfermedad [1].
+    titulo_subbloque("1.2. Binarización de la variable objetivo")
 
-niveles_originales = df[VARIABLE_ORIGINAL].value_counts().sort_index()
+    print("Niveles de num SOLO en entrenamiento: " + ", ".join(
+        f"{nivel}: {cantidad}" for nivel, cantidad in niveles_entrenamiento.items()))
+    print(f"Ausencia: {clases_previas[0]}; presencia: {clases_previas[1]}")
+    print(f"Prevalencia del entrenamiento real: {y_real.mean():.4f}")
 
-df[VARIABLE_OBJETIVO] = (df[VARIABLE_ORIGINAL] > 0).astype(int)
+    titulo_subbloque("1.3. Exclusión de registros incompletos")
 
-clases = df[VARIABLE_OBJETIVO].value_counts().sort_index()
+    print(f"Registros excluidos por ausentes: {registros_ingesta - registros_completos}")
+    print("Ceros observados conservados; sin imputación ni revisión de duplicados.")
 
-titulo_subbloque("1.2. Binarización de la variable objetivo")
-print("Niveles de origen:  "
-      + ",  ".join(f"{nivel}: {cantidad}"
-                   for nivel, cantidad in niveles_originales.items()))
-print(f"Ausencia (0):       {clases[0]} registros "
-      f"({clases[0] / registros_ingesta * 100:.2f} %)")
-print(f"Presencia (1):      {clases[1]} registros "
-      f"({clases[1] / registros_ingesta * 100:.2f} %)")
-print(f"Razón entre clases: {clases[0] / clases[1]:.2f} a 1")
+    titulo_subbloque("1.4. Composición del conjunto de predictoras")
 
-# 1.3. Eliminación de registros incompletos
-# Excluye registros incompletos sin imputación [15].
+    print(f"Predictoras conservadas: {', '.join(predictoras)}")
+    print(f"Categóricas: {', '.join(CATEGORICAS)}; conteo discreto: ca")
+    print(f"Continuas: {', '.join(CONTINUAS)}")
+    print("Valores atípicos conservados; sin recorte ni eliminación por IQR.")
 
-ausentes = df.isnull().sum()
-ausentes = ausentes[ausentes > 0]
-prevalencia_previa = df[VARIABLE_OBJETIVO].mean()
+    titulo_subbloque("1.5. Partición y frecuencias del entrenamiento")
 
-df = df.dropna().reset_index(drop=True)
+    print(f"Partición estratificada por diagnóstico: 80/20; semilla {SEMILLA}")
+    print("Valores observados SOLO en entrenamiento real (valor: frecuencia):")
+    for columna in NO_INTERPOLABLES:
+        frecuencias = X_real[columna].value_counts().sort_index()
+        print(f"    {columna}: " + ", ".join(
+            f"{int(valor)}: {int(n)}" for valor, n in frecuencias.items()))
+    print("Este resumen no comprueba categorías ni prevalencia de prueba.")
 
-titulo_subbloque("1.3. Eliminación de registros incompletos")
-print("Valores ausentes:      "
-      + ",  ".join(f"{variable}: {cantidad}"
-                   for variable, cantidad in ausentes.items()))
-print(f"Registros eliminados:  {registros_ingesta - len(df)}")
-print(f"Registros conservados: {len(df)} de {registros_ingesta} "
-      f"({len(df) / registros_ingesta * 100:.2f} %)")
-print(f"Prevalencia:           {prevalencia_previa:.4f} -> "
-      f"{df[VARIABLE_OBJETIVO].mean():.4f} "
-      f"({(df[VARIABLE_OBJETIVO].mean() - prevalencia_previa) * 100:+.2f} "
-      f"puntos porcentuales)")
+    del dataset, df, X, y
 
-# 1.4. Composición del conjunto de predictoras
-# Conserva las trece predictoras y los atípicos según el EDA.
+    titulo_subbloque("1.6. Balanceo preliminar del entrenamiento")
 
-titulo_subbloque("1.4. Composición del conjunto de predictoras")
-print(f"Predictoras conservadas: {len(predictoras)}; ninguna se descarta.")
-print(f"    categóricas ({len(CATEGORICAS)}): {', '.join(CATEGORICAS)}")
-print(f"    conteos     ({len(CONTEOS_DISCRETOS)}): {', '.join(CONTEOS_DISCRETOS)}")
-print(f"    continuas   ({len(CONTINUAS)}): {', '.join(CONTINUAS)}")
-print("Valores atípicos: se conservan; no se aplica eliminación ni recorte.")
+    # SMOTENC aplicado exclusivamente al entrenamiento [9], [10].
+    indices = [X_real.columns.get_loc(c) for c in NO_INTERPOLABLES]
+    X_balanceado, y_balanceado = SMOTENC(
+        categorical_features=indices, random_state=SEMILLA,
+    ).fit_resample(X_real, y_real)
+    clases_posteriores = y_balanceado.value_counts().sort_index()
+    print(f"Antes: {clases_previas[0]} ausencia / {clases_previas[1]} presencia")
+    print(f"Después: {clases_posteriores[0]} ausencia / {clases_posteriores[1]} presencia")
+    print(f"Sintéticos añadidos: {len(X_balanceado) - len(X_real)}")
+    print("Esta salida no alimenta CV ni se incluye como referencia del artefacto.")
+    return X_real, y_real, predictoras, reserva
 
-# 1.5. Partición en entrenamiento y prueba
-# Divide 80/20 por diagnóstico antes del balanceo [7].
-
-X = df[predictoras]
-y = df[VARIABLE_OBJETIVO]
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y,
-    test_size=PROPORCION_PRUEBA,
-    random_state=SEMILLA,
-    stratify=y,
-)
-
-X_train = X_train.reset_index(drop=True)
-X_test = X_test.reset_index(drop=True)
-y_train = y_train.reset_index(drop=True)
-y_test = y_test.reset_index(drop=True)
-
-valores_sin_representacion = [
-    f"{columna}={int(categoria)}"
-    for columna in NO_INTERPOLABLES
-    for categoria in sorted(df[columna].unique())
-    if int(X_test[columna].value_counts().get(categoria, 0)) == 0
-]
-
-titulo_subbloque("1.5. Partición en entrenamiento y prueba")
-print(f"Entrenamiento: {len(X_train)} registros "
-      f"({len(X_train) / len(df) * 100:.0f} %), prevalencia {y_train.mean():.4f}")
-print(f"Prueba:        {len(X_test)} registros "
-      f"({len(X_test) / len(df) * 100:.0f} %), prevalencia {y_test.mean():.4f}")
-if valores_sin_representacion:
-    print("Valores discretos sin representación en prueba: "
-          + ", ".join(valores_sin_representacion))
-else:
-    print("Todos los valores categóricos y del conteo mantienen representación en prueba.")
-
-# 1.6. Balanceo de la clase minoritaria
-# Aplica SMOTENC al entrenamiento y conserva su copia real [9], [10].
-
-# La validación parte del entrenamiento real, antes de SMOTENC.
-
-X_train_sin_balancear = X_train.copy()
-y_train_sin_balancear = y_train.copy()
-
-clases_previas = y_train.value_counts().sort_index()
-
-indices_no_interpolables = [X_train.columns.get_loc(columna) for columna in NO_INTERPOLABLES]
-
-X_train, y_train = SMOTENC(
-    categorical_features=indices_no_interpolables,
-    random_state=SEMILLA,
-).fit_resample(X_train, y_train)
-
-clases_posteriores = y_train.value_counts().sort_index()
-sinteticos = int(clases_posteriores[1] - clases_previas[1])
-
-titulo_subbloque("1.6. Balanceo de la clase minoritaria")
-print(f"Entrenamiento antes:   {clases_previas[0]} ausencia / "
-      f"{clases_previas[1]} presencia "
-      f"(razón {clases_previas[0] / clases_previas[1]:.2f} a 1)")
-print(f"Entrenamiento después: {clases_posteriores[0]} ausencia / "
-      f"{clases_posteriores[1]} presencia "
-      f"(razón {clases_posteriores[0] / clases_posteriores[1]:.2f} a 1)")
-print(f"Muestras sintéticas generadas: {sinteticos}")
-print(f"Total de entrenamiento: {len(X_train)} registros "
-      f"({len(X_train) - sinteticos} reales, {sinteticos} sintéticos)")
-print(f"Conjunto de prueba:     {len(X_test)} registros, sin modificar "
-      f"(prevalencia {y_test.mean():.4f})")
+(X_train_sin_balancear, y_train_sin_balancear,
+ predictoras, reserva_prueba) = preparar_datos()
 
 
 # Bloque 2: entrenamiento de los modelos
@@ -220,7 +189,7 @@ indices_no_interpolables_cv = [
 
 titulo_subbloque("2.1. Protocolo de ajuste")
 print(f"Entrenamiento real: {len(X_train_sin_balancear)} registros (80 %)")
-print(f"Prueba disponible:  {len(X_test)} registros (20 %); no se evalúa aquí")
+print(f"Reserva sin abrir: {reserva_prueba.n_registros} registros (20 %)")
 print(f"Selección interna:  {PLIEGUES} pliegues estratificados, semilla {SEMILLA}")
 print("SMOTENC se ajusta dentro de cada entrenamiento, antes de preparar LR.")
 print("XGBoost recibe las variables originales después del remuestreo.")
@@ -285,7 +254,7 @@ configuracion_entrenamiento_lr = {
     "semilla": SEMILLA,
     "proporcion_prueba": PROPORCION_PRUEBA,
     "n_entrenamiento_real": len(X_train_sin_balancear),
-    "n_prueba": len(X_test),
+    "n_prueba": reserva_prueba.n_registros,
     "columnas": list(X_train_sin_balancear.columns),
     "nominales_one_hot": NOMINALES_LR,
     "columnas_estandarizadas": RESTO_LR,
@@ -335,7 +304,7 @@ configuracion_entrenamiento_xgb = {
     "semilla": SEMILLA,
     "proporcion_prueba": PROPORCION_PRUEBA,
     "n_entrenamiento_real": len(X_train_sin_balancear),
-    "n_prueba": len(X_test),
+    "n_prueba": reserva_prueba.n_registros,
     "columnas": list(X_train_sin_balancear.columns),
     "no_interpolables_smotenc": NO_INTERPOLABLES,
     "preparacion_especifica": "Sin escalado ni one-hot adicional",
